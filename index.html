@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>精靈動畫橫向捲軸作品</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #70ad43;
+    }
+  </style>
+  <!-- 載入 p5.js 函式庫 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.min.js"></script>
+</head>
+<body>
+  <script>
+    let spriteFrames = []; // 儲存 walk/0.png 至 walk/9.png 的十張走路影格
+    let attackSheet; // 儲存 fight/111.png 的攻擊精靈圖
+    let bgImage; // 儲存自訂背景圖片
+    let currentFrame = 0; // 記錄目前要顯示的動畫影格
+    let frameBottomRows = []; // 儲存每格角色可見像素的底緣位置
+    let attackBottomRows = []; // 儲存每格攻擊圖片可見像素的底緣位置
+    let characterX = 0; // 記錄角色在畫布上的水平位置
+    let backgroundCameraX = 0; // 記錄背景鏡頭在長圖上的位置
+    let animationTime = 0; // 記錄角色開始移動後的動畫時間
+    let facingRight = false; // 記錄角色目前面向右邊或左邊
+    let attackFacingRight = false; // 記錄本次攻擊開始時角色的面向
+    let isAttacking = false; // 記錄角色目前是否正在攻擊
+    let attackStartedAt = 0; // 記錄本次攻擊動畫開始的時間
+    let attackFrame = 0; // 記錄目前播放的攻擊影格
+    const frameCount = 10; // 設定精靈圖內的影格總數
+    const attackFrameCount = 7; // 設定攻擊精靈圖內的影格總數
+    const attackFrameWidth = 87; // 設定攻擊精靈圖每格的寬度
+    const frameInterval = 100; // 設定每 100 毫秒切換影格一次
+    const spriteScale = 4; // 將原始像素角色放大以便觀看
+    const movementSpeed = 300; // 設定角色每秒移動的像素距離
+
+    function preload() { // 在畫布開始繪製前載入精靈圖與背景圖
+      spriteFrames = loadImage(`walk/11.png`); // 載入走路影格
+      attackSheet = loadImage("fight/111.png"); // 載入七格攻擊動作精靈圖
+      bgImage = loadImage("bg.png"); // 載入自訂背景圖（請將圖片存為 bg.png）
+    } // 結束載入函式
+
+    function setup() { // 初始化全螢幕動畫畫布
+      createCanvas(windowWidth, windowHeight); // 讓畫布尺寸符合整個瀏覽器視窗
+      pixelDensity(1); // 固定像素密度以保持精靈圖清晰
+      noSmooth(); // 關閉平滑縮放以保留像素風格
+      imageMode(CORNER); // 使用圖片左上角作為繪製定位點
+      characterX = width / 2; // 將角色初始位置放在畫布正中央
+      
+      // 計算背景相對於畫布高度的寬度 (保持原圖比例)
+      const tileWidth = (bgImage.width / bgImage.height) * height;
+      backgroundCameraX = tileWidth; // 將背景鏡頭初始位置設在中間的圖面
+
+      // 計算走路影格底緣
+      spriteFrames.forEach((frame, frameIndex) => {
+        frame.loadPixels();
+        for (let row = frame.height - 1; row >= 0; row--) {
+          let rowHasSprite = false;
+          for (let column = 0; column < frame.width; column++) {
+            const alphaIndex = (row * frame.width + column) * 4 + 3;
+            if (frame.pixels[alphaIndex] > 0) {
+              rowHasSprite = true;
+              break;
+            }
+          }
+          if (rowHasSprite) {
+            frameBottomRows[frameIndex] = row + 1;
+            break;
+          }
+        }
+      });
+
+      // 計算攻擊精靈圖底緣
+      attackSheet.loadPixels();
+      for (let frameIndex = 0; frameIndex < attackFrameCount; frameIndex++) {
+        const sourceStartX = frameIndex * attackFrameWidth;
+        const sourceEndX = Math.min(sourceStartX + attackFrameWidth, attackSheet.width);
+        for (let row = attackSheet.height - 1; row >= 0; row--) {
+          let rowHasSprite = false;
+          for (let column = sourceStartX; column < sourceEndX; column++) {
+            const alphaIndex = (row * attackSheet.width + column) * 4 + 3;
+            if (attackSheet.pixels[alphaIndex] > 0) {
+              rowHasSprite = true;
+              break;
+            }
+          }
+          if (rowHasSprite) {
+            attackBottomRows[frameIndex] = row + 1;
+            break;
+          }
+        }
+      }
+    } // 結束初始化函式
+
+    function draw() { // 每一畫格繪製背景並更新角色動畫
+      // 計算背景等比例寬度
+      const tileWidth = (bgImage.width / bgImage.height) * height;
+      const maxCameraX = max(0, tileWidth * 3 - width); // 鏡頭最右位置
+
+      // 偵測移動按鍵
+      const movingLeft = keyIsDown(65); // A 鍵向左
+      const movingRight = keyIsDown(68); // D 鍵向右
+      const moveDirection = Number(movingRight) - Number(movingLeft);
+      
+      if (moveDirection !== 0) {
+        facingRight = moveDirection > 0;
+      }
+
+      // 處理背景與角色位置捲動邏輯
+      if (moveDirection !== 0 && !isAttacking) {
+        const elapsedTime = min(deltaTime, 50) / 1000;
+        const distance = movementSpeed * elapsedTime;
+
+        if (moveDirection > 0) { // 往右走
+          if (characterX < width / 2) {
+            characterX = min(width / 2, characterX + distance * moveDirection);
+          } else {
+            const scrollDistance = min(distance, maxCameraX - backgroundCameraX);
+            backgroundCameraX += scrollDistance;
+            const remaining = distance - scrollDistance;
+            if (remaining > 0) {
+              characterX = min(width, characterX + remaining);
+            }
+          }
+        } else { // 往左走
+          if (characterX > width / 2) {
+            characterX = max(width / 2, characterX + distance * moveDirection);
+          } else {
+            const scrollDistance = min(distance, backgroundCameraX);
+            backgroundCameraX -= scrollDistance;
+            const remaining = distance - scrollDistance;
+            if (remaining > 0) {
+              characterX = max(0, characterX - remaining);
+            }
+          }
+        }
+        animationTime += min(deltaTime, 50);
+        currentFrame = floor(animationTime / frameInterval) % (frameCount - 1) + 1;
+      } else if (moveDirection === 0) {
+        animationTime = 0;
+        currentFrame = 0;
+      }
+
+      // 繪製 3 張無縫串接背景
+      for (let i = 0; i < 3; i++) {
+        const bgX = i * tileWidth - backgroundCameraX;
+        image(bgImage, bgX, 0, tileWidth, height);
+      }
+
+      // 繪製攻擊狀態
+      if (isAttacking) {
+        attackFrame = floor((millis() - attackStartedAt) / frameInterval);
+        if (attackFrame < attackFrameCount) {
+          const sourceX = attackFrame * attackFrameWidth;
+          const sourceWidth = Math.min(attackFrameWidth, attackSheet.width - sourceX);
+          const dWidth = attackFrameWidth * spriteScale;
+          const dHeight = attackSheet.height * spriteScale;
+          drawFacingImage(attackSheet, characterX - dWidth / 2, height - attackBottomRows[attackFrame] * spriteScale, dWidth, dHeight, attackFacingRight, sourceX, sourceWidth, attackSheet.height);
+          return;
+        }
+        isAttacking = false;
+      }
+
+      // 繪製一般走路/待機角色
+      const frame = spriteFrames[currentFrame];
+      const dWidth = frame.width * spriteScale;
+      const dHeight = frame.height * spriteScale;
+      drawFacingImage(frame, characterX - dWidth / 2, height - frameBottomRows[currentFrame] * spriteScale, dWidth, dHeight, facingRight);
+    } // draw 結束
+
+    function drawFacingImage(source, x, y, imageWidth, imageHeight, faceRight, sourceX, sourceWidth, sourceHeight) {
+      push();
+      if (faceRight) {
+        translate(characterX * 2, 0);
+        scale(-1, 1);
+      }
+      if (sourceWidth === undefined) {
+        image(source, x, y, imageWidth, imageHeight);
+      } else {
+        image(source, x, y, imageWidth, imageHeight, sourceX, 0, sourceWidth, sourceHeight);
+      }
+      pop();
+    }
+
+    function keyPressed() {
+      if (key === "a" || key === "A") facingRight = false;
+      if (key === "d" || key === "D") facingRight = true;
+      if ((key === "f" || key === "F") && !isAttacking) {
+        isAttacking = true;
+        attackFrame = 0;
+        attackStartedAt = millis();
+        attackFacingRight = facingRight;
+      }
+    }
+
+    function windowResized() {
+      resizeCanvas(windowWidth, windowHeight);
+    }
+  </script>
+</body>
+</html>
